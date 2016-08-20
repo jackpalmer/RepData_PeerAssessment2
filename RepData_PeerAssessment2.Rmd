@@ -1,0 +1,118 @@
+---
+title: "Analysis of the Dangers and Expense of US Weather Events Using the NOAA Storm Database"
+author: "Jack Palmer"
+date: "August 20, 2016"
+output: html_document
+---
+## Synopsis
+
+Using the NOAA Storm Database this report is an analysis of what events are the most dangerous and the most expensive. The aim of this report is to assist  government or municipal managers who might be responsible for preparing for severe weather events and will need to prioritize resources for different types of events.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+```
+
+# Data Processing
+
+To download the data the code downloads the data to a temporary file and reads the CSV. It is not necessary to unzip the bz2 file, which read.csv can handle. 
+
+```{r load data, cache=TRUE}
+temp <- tempfile()
+download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",temp)
+data <- read.csv(temp)
+unlink(temp)
+```
+
+The event type data is very messy and includes events beyond the scope of the allowed event names within the NOAA's documentation. For the purposes of this analysis we will not delete those invalid event types, but must clean up the naming conventions to ensure that data is properly aggregated.
+
+```{r load events}
+data$EVTYPE <- toupper(data$EVTYPE)
+data$EVTYPE <- gsub("AVALANCE","AVALANCHE",data$EVTYPE)
+data$EVTYPE <- gsub("BEACH EROSIN","BEACH EROSION",data$EVTYPE)
+data$EVTYPE <- gsub("/COASTAL FLOOD","",data$EVTYPE)
+data$EVTYPE <- gsub("BLIZZARD.*","BLIZZARD",data$EVTYPE)
+data$EVTYPE <- gsub("FLASH FLOOD.*","FLASH FLOOD",data$EVTYPE)
+data$EVTYPE <- gsub("HURRICANE.*","HURRICANE",data$EVTYPE)
+
+
+```
+
+In order to calculate the most dangerous event types a "Danger Index" is created, combining the results of Fatalities and Injuries. 
+
+```{r}
+data$DangerIndex <- data$FATALITIES + data$INJURIES
+```
+
+To calculate the total damage cost it is necessary to use the PROPDMGEXP and CROPDMGEXP fields within the database to calculate cost in total dollars, and then calculating the sum of the costs.
+
+```{r calculate damage cost}
+data$PropDmgCost <- with(data, ifelse(PROPDMGEXP == "B",
+                               PROPDMG * 1000000000,
+                                 ifelse(PROPDMGEXP == "M",
+                                 PROPDMG * 1000000,
+                                    ifelse(PROPDMGEXP == "K",
+                                    PROPDMG * 1000,
+                                    0))))
+
+data$CropDmgCost <- with(data, ifelse(CROPDMGEXP == "B",
+                               CROPDMG * 1000000000,
+                                 ifelse(CROPDMGEXP == "M",
+                                 CROPDMG * 1000000,
+                                    ifelse(CROPDMGEXP == "K",
+                                    CROPDMG * 1000,
+                                    0))))
+
+data$TotalDmgCost <- data$PropDmgCost + data$CropDmgCost
+```
+
+
+# Results
+## Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+
+In order to identify the most dangerous events the number of Fatalities, Injuries and the Danger Index is aggregated by Event Type. The data is then ordered by the Danger Index, and the top 10 events are returned.
+
+```{r aggregate health data}
+most_dangerous_events <- data %>% 
+                              group_by(EVTYPE) %>% 
+                              summarise_each(funs(sum), FATALITIES, INJURIES, DangerIndex)
+most_dangerous_events <- most_dangerous_events[order(-most_dangerous_events$DangerIndex), ]
+most_dangerous_events_top_10 <- head(most_dangerous_events, 10)
+```
+
+To visualize the comparative impact of these different event types the top 10 most dangerous event types are plotted.
+
+```{r plot top 10 health hazards}
+Molten <- melt(select(most_dangerous_events_top_10, EVTYPE, FATALITIES,INJURIES), id.vars = "EVTYPE")
+y <- ggplot(Molten, aes(x = EVTYPE, y = value, fill = variable))
+y + geom_bar(stat = "identity") + 
+  xlab("Event Type") + 
+  ylab("Danger Index") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Across the United States, which types of events have the greatest economic consequences?
+In order to identify the most expensive events the total damage cost is aggregated by Event Type. The data is then ordered by the total cost, and the top 10 events are returned.
+
+
+```{r aggregate expense data}
+most_expensive_events <- data %>% 
+                              group_by(EVTYPE) %>% 
+                              summarise_each(funs(sum), PropDmgCost, CropDmgCost, TotalDmgCost)
+most_expensive_events <- most_expensive_events[order(-most_expensive_events$TotalDmgCost), ]
+most_expensive_events_top_10 <- head(most_expensive_events, 10)
+```
+
+To visualize the relative financial impact of the events the event are plotted using a bar plot.
+
+```{r plot top 10 expensive events}
+Molten <- melt(select(most_expensive_events_top_10, EVTYPE, PropDmgCost,CropDmgCost), id.vars = "EVTYPE")
+y <- ggplot(Molten, aes(x = EVTYPE, y = value, fill = variable))
+y + geom_bar(stat = "identity") + 
+  xlab("Event Type") + 
+  ylab("Cost") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+  scale_y_continuous(labels = scales::dollar)
+```
